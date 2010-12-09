@@ -10,7 +10,7 @@ It checks the output of rs.status command and reports the status of each errmsg 
 
 In your Nagios plugins directory run
 
-<pre><code>git clone git://github.com/mzupan/nagios-plugin-mongodb.git</code></pre>
+<pre><code>git clone git://github.com/traveliq/nagios_plugin_mongodb_errmsg.git</code></pre>
 
 ## Usage
 
