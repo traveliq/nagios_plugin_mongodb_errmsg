@@ -1,0 +1,133 @@
+#!/bin/bash
+
+#
+# check_mongo_errmsg
+#
+# This script shows error messages of all nodes inside a mongodb replication 
+# set from the pov of the node the scrinpt is running on.
+# It generates 
+#       - Warnings if (default) one node is reporting errors, 
+#       - Critical if (default) more than one node is reporting errors and 
+#       - OK if it can't find any error message
+#
+# 2010 Travel IQ GmbH - Brande (Frank Brandewiede <brande@traveliq.net>)
+#
+# Nagios 
+# service definition:
+#
+#       define service {
+#              use                     generic-service
+#              host_name               mongo-db1
+#              service_description     MongoDB errmsg
+#              check_command           check_mongo_errmsg (optional !WARNING!CRITICAL!)
+#       }
+#
+# commands.cfg:
+#
+#       define command {
+#           command_name    check_mongo_errmsg
+#           command_line    /usr/local/nagios/libexec/check_mongo_errmsg $HOSTADDRESS$ (optional $ARG1$ (WARNING) $ARG2$ (CRITICAL))
+#       }
+#
+# Defaults:
+#          - WARNING = 1
+#          - CRITICAL = 1
+#
+# This setup garantiert a message if one node has error messages
+#
+#
+####################################################################################################################################
+
+DBHOST="$1"
+WARNING="$2"
+CRITICAL="$3"
+
+RSSTATUSTMPFILE="/tmp/rs.status-$DBHOST.tmp"
+LINECOUNT=0
+ARRAYCOUNT=1
+STATUSARRAYCOUNT=1
+
+if [ "$#" -eq "0" ];then
+        STATUS="Usage: check_mongo_errmsg <MONGODB HOST> (optioonal) <WARNING> <CRITICAL>"
+        PRSTATUS="2"
+        printf "$STATUS"
+        exit $PRSTATUS
+fi
+
+if [ "$WARNING" == "" ];then
+        WARNING="1"
+        echo "$WARNING"
+fi
+
+if [ "$CRITICAL" == "" ];then
+        CRITICAL="1"
+        echo "$CRITICAL"
+fi
+
+function printstatus ()
+{
+        STATUS=$1
+        PRSTATUS=$2
+        printf "$STATUS"
+        exit $PRSTATUS
+}
+
+        while read LINE; do
+                REPLSETSTATUS[$STATUSARRAYCOUNT]=`echo $LINE`
+                ((STATUSARRAYCOUNT++))
+        done < <(echo "rs.status()" | mongo --host $DBHOST | grep -v "{" | grep -v "}" | grep -v "\[" | grep -v "\]")
+
+        for ((STATUSARRAYCOUNT=1; STATUSARRAYCOUNT < "${#REPLSETSTATUS[@]}"; STATUSARRAYCOUNT++)); do
+                ((LINECOUNT++))
+                STATUS=`echo ${REPLSETSTATUS[${STATUSARRAYCOUNT}]} | grep state | cut -f1 -d "," | awk '{print $3 }'`
+                if [ "$STATUS" == "0" ] || [ "$STATUS" == "1" ] || [ "$STATUS" == "2" ] || [ "$STATUS" == "3" ] || [ "$STATUS" == "4" ] || [ "$STATUS" == "5" ] || [ "$STATUS" == "6" ] || [ "$STATUS" == "7" ] || [ "$STATUS" == "8" ]; then
+                        let END=$LINECOUNT+3
+                        let NAME=$LINECOUNT-2
+                        NAME=`echo ${REPLSETSTATUS[${NAME}]} | cut -f4 -d '"'`
+                        NEXTFIELD=`echo ${REPLSETSTATUS[${END}]} | cut -f2 -d '"'`
+
+                        if [ "$NEXTFIELD" == "errmsg" ]; then
+                                ERRMSG=`echo ${REPLSETSTATUS[${END}]} | cut -f4 -d '"'`
+                                if [ "$ERRMSG" != "." ]; then
+                                        ERRMSGA[$ARRAYCOUNT]=`echo "$NAME - $ERRMSG"`
+                                        ((ARRAYCOUNT++))
+                                else
+                                        echo "$NAME No errmsg" >/dev/null
+                                fi
+                        else                                                                    ## takes place when you use the script via nrpe or bash 
+                                let END=$LINECOUNT+1                                            ## and in the case where  the (rs.status) paragraph and
+                                NEXTFIELD=`echo ${REPLSETSTATUS[${END}]} | cut -f2 -d '"'`      ## errmsg  belongs to the  node the script  is actually 
+                                if [ "$NEXTFIELD" == "self" ]; then                             ## running on.
+                                        let END=$LINECOUNT+2
+                                        if [ "$NEXTFIELD" == "errmsg" ]; then
+                                                ERRMSG=`echo ${REPLSETSTATUS[${END}]} | cut -f4 -d '"'`
+                                                if [ "$ERRMSG" != "." ]; then
+                                                        ERRMSGA[$ARRAYCOUNT]=`echo "$NAME - $ERRMSG"`
+                                                        ((ARRAYCOUNT++))
+                                                else
+                                                        echo "$NAME No errmsg" >/dev/null
+                                                fi
+                                        else
+                                                echo "$NAME No errmsg" >/dev/null
+                                        fi
+                                else
+                                        echo "$NAME No errmsg" >/dev/null
+                                fi
+                        fi
+                fi
+        done
+
+        if [ "${#ERRMSGA[@]}" -le "$WARNING" ] && [ "${#ERRMSGA[@]}" -ne "0" ]; then
+                printstatus "${ERRMSGA[@]}" 1
+        else
+                if [ "${#ERRMSGA[@]}" -ge "$CRITICAL" ] && [ "${#ERRMSGA[@]}" -ne "0" ]; then
+                        printstatus "${ERRMSGA[@]}" 2
+                else
+                        if [ "${#ERRMSGA[@]}" -eq "0" ]; then
+                                printstatus "no errors detected." 0
+                        else
+                                printstatus "something went wrong." 1
+                        fi
+                fi
+        fi
+
